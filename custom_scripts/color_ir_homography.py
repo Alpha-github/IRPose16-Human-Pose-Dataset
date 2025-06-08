@@ -159,10 +159,10 @@ def keypoints_classifier(keypoints):
     # Convert keypoints to readable format
     readable_keypts = cv2.KeyPoint_convert(keypoints).astype('int16')
     # print(readable_keypts)
-    top_left = min(readable_keypts, key=lambda p: (p[0] + p[1]))  # Smallest x + y (close to top-left)
-    top_right = max(readable_keypts, key=lambda p: (p[0] - p[1]))  # Largest x - y (close to top-right)
-    bottom_left = min(readable_keypts, key=lambda p: (p[0] - p[1]))  # Smallest x - y (close to bottom-left)
-    bottom_right = max(readable_keypts, key=lambda p: (p[0] + p[1]))  # Largest x + y (close to bottom-right)
+    top_left = min(readable_keypts, key=lambda p: (p[0] + p[1]))
+    top_right = max(readable_keypts, key=lambda p: (p[0] - p[1]))  
+    bottom_left = min(readable_keypts, key=lambda p: (p[0] - p[1]))  
+    bottom_right = max(readable_keypts, key=lambda p: (p[0] + p[1]))
 
     
     ir_ref_pts = np.array([top_left, bottom_left, bottom_right, top_right])
@@ -538,7 +538,7 @@ irtorgb_aligned_img, irtorgb_overlay, M = homography_transform(ir_image, col_ima
 print(col_image.shape)
 
 
-# video_overlay_2("Recordings\Pranav2\color_video_05-06-25_13-24-35.avi","Recordings\Pranav2\ir_video_05-06-25_13-24-35.avi",M,detect_keypoints=True)
+# video_overlay_2(r"Recordings\Pranav2\color_video_05-06-25_13-24-35.avi",r"Recordings\Pranav2\ir_video_05-06-25_13-24-35.avi",M,detect_keypoints=True)
 video_overlay_2(color_video_path,ir_video_path,M,detect_keypoints=True)
 #----------------------------------------------------------------------
 

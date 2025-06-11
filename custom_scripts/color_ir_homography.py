@@ -6,7 +6,7 @@ from blob_tracking_v2 import ir_keypoint_tracking
 from datetime import datetime
 
 import os
-import inspect
+# import inspect
 
 # from pyorbbecsdk import Config, OBError, OBSensorType, OBFormat, Pipeline, FrameSet, VideoStreamProfile
 # from pyorbbecsdk.examples.utils import frame_to_bgr_image
@@ -60,8 +60,6 @@ def preprocess_ir_data(ir_data, max_data):
     ir_data = cv2.addWeighted(ir_data, 1.5, blurred, -0.5, 0)
 
     return ir_data
-
-
 
 def undistort_image(image, camera_matrix, dist_coeffs):
     h, w = image.shape[:2]
@@ -181,113 +179,6 @@ def homography_transform(image1, image2, ref_pts1, ref_pts2,overlay_perc=0.3):
     overlay = cv2.addWeighted(image2, overlay_perc, aligned_img, 1-overlay_perc, 0)
 
     return aligned_img, overlay, M
-
-      
-def record_color():
-    config = Config()
-    pipeline = Pipeline()
-    try:
-        profile_list = pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
-        color_profile = profile_list.get_default_video_stream_profile()
-        config.enable_stream(color_profile)
-    except Exception as e:
-        print(e)
-        return
-
-    pipeline.start(config)
-
-    while not stop_event.is_set():
-        try:
-            frames = pipeline.wait_for_frames(100)
-            if frames is None:
-                continue
-            color_frame = frames.get_color_frame()
-            if color_frame is None:
-                continue
-            color_image = frame_to_bgr_image(color_frame)
-            color_queue.put(color_image)
-        except Exception as e:
-            print(f"Error in color thread: {e}")
-
-    pipeline.stop()
-
-def record_ir():
-    config = Config()
-    pipeline = Pipeline()
-    try:
-        profile_list = pipeline.get_stream_profile_list(OBSensorType.IR_SENSOR)
-        ir_profile = profile_list.get_video_stream_profile(640, 0, OBFormat.Y16, 30)
-        config.enable_stream(ir_profile)
-    except Exception as e:
-        print(e)
-        return
-
-    pipeline.start(config)
-
-    while not stop_event.is_set():
-        try:
-            frames = pipeline.wait_for_frames(100)
-            if frames is None:
-                continue
-            ir_frame = frames.get_ir_frame()
-            if ir_frame is None:
-                continue
-            ir_data = np.asanyarray(ir_frame.get_data())
-            width = ir_frame.get_width()
-            height = ir_frame.get_height()
-            ir_format = ir_frame.get_format()
-            if ir_format == OBFormat.Y8:
-                ir_data = np.resize(ir_data, (height, width, 1))
-                data_type = np.uint8
-                image_dtype = cv2.CV_8UC1
-                max_data = 255
-            elif ir_format == OBFormat.MJPG:
-                ir_data = cv2.imdecode(ir_data, cv2.IMREAD_UNCHANGED)
-                data_type = np.uint8
-                image_dtype = cv2.CV_8UC1
-                max_data = 255
-                if ir_data is None:
-                    print("decode mjpeg failed")
-                    continue
-                ir_data = np.resize(ir_data, (height, width, 1))
-            else:
-                ir_data = np.frombuffer(ir_data, dtype=np.uint16)
-                data_type = np.uint16
-                image_dtype = cv2.CV_16UC1
-                max_data = 65535
-                ir_data = np.resize(ir_data, (height, width, 1))
-
-            cv2.normalize(ir_data, ir_data, 0, max_data, cv2.NORM_MINMAX, dtype=image_dtype)
-            ir_image = ir_data.astype(data_type)
-            ir_image = undistort_image(ir_image,camera_matrix, dist_coeffs)
-            ir_image = preprocess_ir_data(ir_image, max_data)
-            ir_image = cv2.cvtColor(ir_image, cv2.COLOR_GRAY2RGB)
-            ir_queue.put(ir_image)
-        except Exception as e:
-            print(f"Error in IR thread: {e}")
-
-    pipeline.stop()
-
-def display_frames(matrix):
-    print("Press 'q' or ESC to exit.")
-
-    while not stop_event.is_set():
-        frame = color_queue.get() if not color_queue.empty() else None
-        ir_image = ir_queue.get() if not ir_queue.empty() else None
-
-        if frame is not None and ir_image is not None:
-            aligned_img = cv2.warpPerspective(ir_image, matrix, (frame.shape[1], frame.shape[0]))
-            overlay = cv2.addWeighted(frame, 0.3, aligned_img, 0.7, 0)
-
-            # cv2.imshow("Color Viewer", frame)
-            # cv2.imshow("Infrared Viewer", ir_image)
-            cv2.imshow('Live Feed', overlay)
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            stop_event.set()
-            break
-
-    cv2.destroyAllWindows()
 
 def video_overlay(col_video,ir_video,matrix, detect_keypoints=False,output_path=None):
     col = cv2.VideoCapture(col_video)

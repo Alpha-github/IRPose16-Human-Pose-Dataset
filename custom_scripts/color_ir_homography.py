@@ -4,6 +4,8 @@ import threading
 import queue
 from blob_tracking_v2 import ir_keypoint_tracking
 from datetime import datetime
+from ir_keypoint_tracking_kalman import KeypointTracker
+from utils_homography import *
 
 import os
 # import inspect
@@ -27,158 +29,8 @@ camera_matrix = np.array([[1.80376226e+03,0.00000000e+00,3.16914171e+02],
 )
 dist_coeffs = np.array([[-3.49027957e+00,3.13640856e+01,8.12342618e-02,3.06527531e-02,-3.86407135e+02]])
 
-def preprocess_ir_data(ir_data, max_data):
-    # Convert IR data to float32 for precise processing
-    ir_data = ir_data.astype(np.float32)
-
-    # Logarithmic compression to handle brightness extremes
-    ir_data = np.log1p(ir_data) / np.log1p(max_data) * 255
-    ir_data = np.clip(ir_data, 0, 255).astype(np.uint8)
-
-    # Apply CLAHE to improve contrast in dim areas
-    clahe = cv2.createCLAHE(clipLimit=1, tileGridSize=(6, 6))
-    ir_data = clahe.apply(ir_data)
-
-    # --- Enhance whites more meaningfully ---
-    # Convert to float for smooth power-law adjustment
-    float_ir = ir_data.astype(np.float32) / 255.0
-
-    # Create a mask for whites (you can tweak the threshold)
-    white_mask = float_ir > 0.75
-
-    # Apply gamma correction (>1 brightens high-intensity parts more)
-    boosted_whites = float_ir ** 0.4  # gamma < 1 brightens more
-
-    # Combine: only apply boosted whites where white_mask is True
-    float_ir[white_mask] = boosted_whites[white_mask]
-
-    # Convert back to uint8
-    ir_data = (float_ir * 255).clip(0, 255).astype(np.uint8)
-
-    # Apply sharpening (Unsharp Mask)
-    blurred = cv2.GaussianBlur(ir_data, (0, 0), 2)
-    ir_data = cv2.addWeighted(ir_data, 1.5, blurred, -0.5, 0)
-
-    return ir_data
-
-def undistort_image(image, camera_matrix, dist_coeffs):
-    h, w = image.shape[:2]
-    new_camera_matrix, roi = cv2.getOptimalNewCameraMatrix(camera_matrix, dist_coeffs, (w, h), 1, (w, h))
-    
-    undistorted = cv2.undistort(image, camera_matrix, dist_coeffs, None, new_camera_matrix)
-    
-    x, y, w, h = roi
-    undistorted = undistorted[y:y+h, x:x+w]
-    return undistorted
-
-def detect_aruco(image,type=cv2.aruco.DICT_6X6_250):
-    aruco_dict = cv2.aruco.getPredefinedDictionary(type)
-    arucoParams = cv2.aruco.DetectorParameters()
-    (CORNERS, ids,_) = cv2.aruco.detectMarkers(image, aruco_dict, parameters=arucoParams)
-    marker_positions = {}
-
-    if len(CORNERS) > 0:
-        ids = ids.flatten()
-        for marker_corner, marker_id in zip(CORNERS, ids):
-            corners = marker_corner.reshape((4, 2))
-            cX, cY = np.mean(corners, axis=0).astype(int)
-            marker_positions[marker_id] = (cX, cY)
-    return marker_positions, CORNERS, ids
-
-def draw_aruco(image, corners, ids):
-    for (markerCorner, markerID) in zip(corners, ids):
-        corners = markerCorner.reshape((4, 2))
-        (topLeft, topRight, bottomRight, bottomLeft) = corners
-
-        # convert each of the (x, y)-coordinate pairs to integers
-        topRight = (int(topRight[0]), int(topRight[1]))
-        bottomRight = (int(bottomRight[0]), int(bottomRight[1]))
-        bottomLeft = (int(bottomLeft[0]), int(bottomLeft[1]))
-        topLeft = (int(topLeft[0]), int(topLeft[1]))
-
-        # draw the bounding box of the ArUCo detection
-        cv2.line(image, topLeft, topRight, (0, 255, 0), 2)
-        cv2.line(image, topRight, bottomRight, (0, 255, 0), 2)
-        cv2.line(image, bottomRight, bottomLeft, (0, 255, 0), 2)
-        cv2.line(image, bottomLeft, topLeft, (0, 255, 0), 2)
-
-        # compute and draw the center (x, y)-coordinates of the ArUco
-        # marker
-        cX = int((topLeft[0] + bottomRight[0]) / 2.0)
-        cY = int((topLeft[1] + bottomRight[1]) / 2.0)
-        cv2.circle(image, (cX, cY), 4, (0, 0, 255), -1)
-
-        cv2.putText(image, str(markerID),(topLeft[0], topLeft[1] - 15), cv2.FONT_HERSHEY_SIMPLEX,0.5, (0, 255, 0), 2)
-        print("[INFO] ArUco marker ID: {}".format(markerID))
-    return image
-
-def detect_blob(image, min_thresh=180, max_thresh=255,min_area=1,min_circularity=0.1,min_convexity=0.1,min_inertia=0.01):
-
-    params = cv2.SimpleBlobDetector_Params()
-
-    # Change Color
-    params.filterByColor = True
-    params.blobColor = 255
-
-    # Change thresholds
-    params.minThreshold = min_thresh
-    params.maxThreshold = max_thresh
-
-    # Filter by Area
-    params.filterByArea = True
-    params.minArea = min_area
-
-    # Filter by Circularity
-    params.filterByCircularity = True
-    params.minCircularity = min_circularity
-
-    # Filter by Convexity
-    params.filterByConvexity = True
-    params.minConvexity = min_convexity
-
-    # Filter by Inertia
-    params.filterByInertia = True
-    params.minInertiaRatio = min_inertia
-
-    # Create a detector with the parameters
-    detector = cv2.SimpleBlobDetector_create(params)
-    keypoints = detector.detect(image)
-    return keypoints
-
-def draw_blob(image, keypoints):
-    im_with_keypoints = cv2.drawKeypoints(image, keypoints, np.array([]), (0,0,255), cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-    for i in range(len(keypoints)):
-        cv2.circle(im_with_keypoints, ir_ref_pts[i], 2, (0, 255, 0), -1)
-        cv2.putText(im_with_keypoints, str(i),(ir_ref_pts[i][0], ir_ref_pts[i][1] - 15), cv2.FONT_HERSHEY_SIMPLEX,
-                0.5, (0, 255, 0), 2)
-    return im_with_keypoints
-
-def keypoints_classifier(keypoints):
-    # Convert keypoints to readable format
-    readable_keypts = cv2.KeyPoint_convert(keypoints).astype('int16')
-    # print(readable_keypts)
-    top_left = min(readable_keypts, key=lambda p: (p[0] + p[1]))
-    top_right = max(readable_keypts, key=lambda p: (p[0] - p[1]))  
-    bottom_left = min(readable_keypts, key=lambda p: (p[0] - p[1]))  
-    bottom_right = max(readable_keypts, key=lambda p: (p[0] + p[1]))
-
-    
-    ir_ref_pts = np.array([top_left, bottom_left, bottom_right, top_right])
-    # print(ir_ref_pts)
-    body_points = np.array([x for x in readable_keypts if x not in ir_ref_pts])
-    return ir_ref_pts,body_points
-
-def homography_transform(image1, image2, ref_pts1, ref_pts2,overlay_perc=0.3):
-    # Find homography matrix
-    M, _ = cv2.findHomography(ref_pts1, ref_pts2, cv2.RANSAC)
-
-    # Warp image2 to align with image1
-    aligned_img = cv2.warpPerspective(image1, M, (image2.shape[1], image2.shape[0]))
-
-    # Overlay images
-    overlay = cv2.addWeighted(image2, overlay_perc, aligned_img, 1-overlay_perc, 0)
-
-    return aligned_img, overlay, M
+tracker = KeypointTracker()
+frame_num = 0
 
 def video_overlay(col_video,ir_video,matrix, detect_keypoints=False,output_path=None):
     col = cv2.VideoCapture(col_video)
@@ -243,37 +95,163 @@ def video_overlay(col_video,ir_video,matrix, detect_keypoints=False,output_path=
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-def video_overlay_2(col_video,ir_video,matrix,detect_keypoints=False,output_path=None):
+
+
+# def video_overlay_2(col_video,ir_video,matrix,detect_keypoints=False,output_path=None):
+#     col = cv2.VideoCapture(col_video)
+#     ir = cv2.VideoCapture(ir_video)
+
+#     col_fps = int(col.get(cv2.CAP_PROP_FPS))
+#     col_frame_count = int(col.get(cv2.CAP_PROP_FRAME_COUNT))
+#     ir_frame_count = int(ir.get(cv2.CAP_PROP_FRAME_COUNT))
+#     ir_fps = int(ir.get(cv2.CAP_PROP_FPS))
+#     print(col_fps,ir_fps, col_frame_count, ir_frame_count)
+
+#     if col_frame_count>ir_frame_count:
+#         skip_frames = int(col.get(cv2.CAP_PROP_FRAME_COUNT)) - int(ir.get(cv2.CAP_PROP_FRAME_COUNT))
+#         while skip_frames>0:
+#             _, _ = col.read()
+#             skip_frames-=1
+#     else:
+#         skip_frames = int(ir.get(cv2.CAP_PROP_FRAME_COUNT)) - int(col.get(cv2.CAP_PROP_FRAME_COUNT))
+#         while skip_frames>0:
+#             _, _ = ir.read()
+#             skip_frames-=1
+    
+#     if output_path!=None:
+#         fourcc = cv2.VideoWriter_fourcc(*'XVID')
+#         out = cv2.VideoWriter(output_path, fourcc, col_fps, (int(col.get(cv2.CAP_PROP_FRAME_WIDTH)), int(col.get(cv2.CAP_PROP_FRAME_HEIGHT))))
+    
+#     # Constants
+#     TOTAL_KEYPOINTS = 18
+#     MAX_DISAPPEARANCE = 30
+#     EXCLUDE_TOPMOST = 0  # Number of topmost blobs to ignore
+
+#     # Blob detector setup
+#     params = cv2.SimpleBlobDetector_Params()
+#     params.filterByColor = True
+#     params.blobColor = 255
+#     params.minThreshold = 190
+#     params.maxThreshold = 255
+#     params.filterByArea = True
+#     params.minArea = 1
+#     params.filterByCircularity = True
+#     params.minCircularity = 0.01
+#     params.filterByInertia = True
+#     params.minInertiaRatio = 0.01
+#     params.filterByConvexity = True
+#     params.minConvexity = 0.1
+#     detector = cv2.SimpleBlobDetector_create(params)
+
+#     # Tracking structures
+#     # last_known_positions = {i: None for i in range(TOTAL_KEYPOINTS)}  # id: (x, y)
+#     # inactive_counters = {i: 0 for i in range(TOTAL_KEYPOINTS)}        # id: missing_frame_count
+#     # excluded_positions = []  # Topmost 2 blobs
+#     # frame_num = 0
+
+#     # while(col.isOpened() or ir.isOpened()):
+#     #     ret1, col_frame = col.read()
+#     #     ret2, ir_frame = ir.read()
+
+#     #     if not ret1 or not ret2:
+#     #         break
+
+#     #     ir_frame = undistort_image(ir_frame,camera_matrix, dist_coeffs)
+        
+#     #     if detect_keypoints:
+#     #         _, last_known_positions, inactive_counters, excluded_positions = ir_keypoint_tracking(ir_frame, frame_num, MAX_DISAPPEARANCE, EXCLUDE_TOPMOST, detector, last_known_positions, inactive_counters, excluded_positions)
+#     #         keypoint_ids,trans_keypoints = [], []
+#     #         for key, value in last_known_positions.items():
+#     #             if value != None:
+#     #                 trans_keypoints.append(value)
+#     #                 keypoint_ids.append(key)
+#     #         trans_keypoints = np.array(trans_keypoints).reshape(-1,1,2)
+
+#     #     # for i in keypoints:
+#     #     #     cv2.circle(ir_frame, (int(i.pt[0]), int(i.pt[1])), 2, (0, 255, 0), -1)
+
+#     #     # ir_frame= cv2.drawKeypoints(ir_frame, keypoints, np.array([]), (0, 0, 255), 
+#     #     #                                 cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+
+#     tracker = KeypointTracker()
+#     frame_num = 0
+
+#     while col.isOpened() or ir.isOpened():
+#         ret1, col_frame = col.read()
+#         ret2, ir_frame = ir.read()
+#         if not ret1 or not ret2:
+#             break
+
+#         ir_frame = undistort_image(ir_frame, camera_matrix, dist_coeffs)
+
+#         gray = cv2.cvtColor(ir_frame, cv2.COLOR_BGR2GRAY)
+#         kps = detector.detect(gray)
+#         det_pts = [(kp.pt[0], kp.pt[1]) for kp in kps]
+
+#         tracker.update(det_pts, frame_num)
+#         positions = tracker.get_positions()
+
+#         keypoint_ids, trans_keypoints = [], []
+#         for i, pt in enumerate(positions):
+#             if pt is not None:
+#                 keypoint_ids.append(i)
+#                 trans_keypoints.append(pt)
+#         trans_keypoints = np.array(trans_keypoints).reshape(-1, 1, 2)
+
+#         frame_num += 1
+        
+#         # Warp image2 to align with image1
+#         aligned_img = cv2.warpPerspective(ir_frame, matrix, (col_frame.shape[1], col_frame.shape[0]))
+
+#         if detect_keypoints:
+#             mapped_keypoints = np.array(cv2.perspectiveTransform(trans_keypoints, matrix).reshape(-1,2))
+#             valid_keypoints = 0
+#             for id in range(len(keypoint_ids)):
+#                 x, y = (int(mapped_keypoints[id,0]), int(mapped_keypoints[id,1]))
+#                 cv2.circle(col_frame, (x, y), 5, (0, 255, 255), -1)
+#                 # cv2.circle(col_frame, (int(mapped_keypoints[i,0]), int(mapped_keypoints[i,1])), 5, (0, 255, 255), -1)
+#                 cv2.putText(col_frame, str(keypoint_ids[id]), (x + 10, y - 10),
+#                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+#                 valid_keypoints += 1
+
+#             # if valid_keypoints < TOTAL_KEYPOINTS - EXCLUDE_TOPMOST:
+#             #     print(frame_num, "Valid keypoints:", valid_keypoints)
+#         # Overlay images
+#         overlay = cv2.addWeighted(col_frame, 1, aligned_img, 0, 0)
+
+#         if output_path!=None:
+#             out.write(overlay)
+
+#         cv2.imshow('Live Feed', overlay)
+#         if cv2.waitKey(1) & 0xFF == ord('q'):
+#             break
+
+#         frame_num += 1
+#     col.release()
+#     ir.release()
+
+
+def setup_video_streams(col_video, ir_video):
     col = cv2.VideoCapture(col_video)
     ir = cv2.VideoCapture(ir_video)
 
     col_fps = int(col.get(cv2.CAP_PROP_FPS))
+    ir_fps = int(ir.get(cv2.CAP_PROP_FPS))
     col_frame_count = int(col.get(cv2.CAP_PROP_FRAME_COUNT))
     ir_frame_count = int(ir.get(cv2.CAP_PROP_FRAME_COUNT))
-    ir_fps = int(ir.get(cv2.CAP_PROP_FPS))
-    print(col_fps,ir_fps, col_frame_count, ir_frame_count)
 
-    if col_frame_count>ir_frame_count:
-        skip_frames = int(col.get(cv2.CAP_PROP_FRAME_COUNT)) - int(ir.get(cv2.CAP_PROP_FRAME_COUNT))
-        while skip_frames>0:
-            _, _ = col.read()
-            skip_frames-=1
-    else:
-        skip_frames = int(ir.get(cv2.CAP_PROP_FRAME_COUNT)) - int(col.get(cv2.CAP_PROP_FRAME_COUNT))
-        while skip_frames>0:
-            _, _ = ir.read()
-            skip_frames-=1
-    
-    if output_path!=None:
-        fourcc = cv2.VideoWriter_fourcc(*'XVID')
-        out = cv2.VideoWriter(output_path, fourcc, col_fps, (int(col.get(cv2.CAP_PROP_FRAME_WIDTH)), int(col.get(cv2.CAP_PROP_FRAME_HEIGHT))))
-    
-    # Constants
-    TOTAL_KEYPOINTS = 18
-    MAX_DISAPPEARANCE = 30
-    EXCLUDE_TOPMOST = 0  # Number of topmost blobs to ignore
+    print(f"Color FPS: {col_fps}, IR FPS: {ir_fps}, Frames: {col_frame_count} vs {ir_frame_count}")
+    return col, ir, col_fps, col_frame_count, ir_frame_count
 
-    # Blob detector setup
+
+def sync_video_streams(col, ir, col_frame_count, ir_frame_count):
+    skip_frames = abs(col_frame_count - ir_frame_count)
+    capture = col if col_frame_count > ir_frame_count else ir
+    for _ in range(skip_frames):
+        capture.read()
+
+
+def initialize_blob_detector():
     params = cv2.SimpleBlobDetector_Params()
     params.filterByColor = True
     params.blobColor = 255
@@ -287,58 +265,73 @@ def video_overlay_2(col_video,ir_video,matrix,detect_keypoints=False,output_path
     params.minInertiaRatio = 0.01
     params.filterByConvexity = True
     params.minConvexity = 0.1
-    detector = cv2.SimpleBlobDetector_create(params)
+    return cv2.SimpleBlobDetector_create(params)
 
-    # Tracking structures
-    last_known_positions = {i: None for i in range(TOTAL_KEYPOINTS)}  # id: (x, y)
-    inactive_counters = {i: 0 for i in range(TOTAL_KEYPOINTS)}        # id: missing_frame_count
-    excluded_positions = []  # Topmost 2 blobs
+
+def initialize_video_writer(output_path, col, fps):
+    width = int(col.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(col.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    return cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+
+def draw_keypoints_on_frame(col_frame, keypoint_ids, mapped_keypoints):
+    for id in range(len(keypoint_ids)):
+        x, y = (int(mapped_keypoints[id, 0]), int(mapped_keypoints[id, 1]))
+        cv2.circle(col_frame, (x, y), 5, (0, 255, 255), -1)
+        cv2.putText(col_frame, str(keypoint_ids[id]), (x + 10, y - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+
+def process_frame_pair(col_frame, ir_frame, matrix, tracker, detector, detect_keypoints, frame_num):
+    ir_frame = undistort_image(ir_frame, camera_matrix, dist_coeffs)
+
+    gray = cv2.cvtColor(ir_frame, cv2.COLOR_BGR2GRAY)
+    keypoints = detector.detect(gray)
+    det_pts = [(kp.pt[0], kp.pt[1]) for kp in keypoints]
+
+    tracker.update(det_pts, frame_num)
+    positions = tracker.get_positions()
+
+    keypoint_ids, trans_keypoints = [], []
+    for i, pt in enumerate(positions):
+        if pt is not None:
+            keypoint_ids.append(i)
+            trans_keypoints.append(pt)
+
+    trans_keypoints = np.array(trans_keypoints).reshape(-1, 1, 2)
+    aligned_img = cv2.warpPerspective(ir_frame, matrix, (col_frame.shape[1], col_frame.shape[0]))
+
+    if detect_keypoints:
+        mapped_keypoints = cv2.perspectiveTransform(trans_keypoints, matrix).reshape(-1, 2)
+        draw_keypoints_on_frame(col_frame, keypoint_ids, mapped_keypoints)
+
+    overlay = cv2.addWeighted(col_frame, 1, aligned_img, 0, 0)
+    return overlay
+
+
+def video_overlay_2(col_video, ir_video, matrix, detect_keypoints=False, output_path=None):
+    col, ir, col_fps, col_frame_count, ir_frame_count = setup_video_streams(col_video, ir_video)
+    sync_video_streams(col, ir, col_frame_count, ir_frame_count)
+
+    if output_path:
+        out = initialize_video_writer(output_path, col, col_fps)
+    else:
+        out = None
+
+    detector = initialize_blob_detector()
+    tracker = KeypointTracker()
     frame_num = 0
 
-    while(col.isOpened() or ir.isOpened()):
+    while col.isOpened() and ir.isOpened():
         ret1, col_frame = col.read()
         ret2, ir_frame = ir.read()
-
         if not ret1 or not ret2:
             break
 
-        ir_frame = undistort_image(ir_frame,camera_matrix, dist_coeffs)
-        
-        if detect_keypoints:
-            _, last_known_positions, inactive_counters, excluded_positions = ir_keypoint_tracking(ir_frame, frame_num, MAX_DISAPPEARANCE, EXCLUDE_TOPMOST, detector, last_known_positions, inactive_counters, excluded_positions)
-            keypoint_ids,trans_keypoints = [], []
-            for key, value in last_known_positions.items():
-                if value != None:
-                    trans_keypoints.append(value)
-                    keypoint_ids.append(key)
-            trans_keypoints = np.array(trans_keypoints).reshape(-1,1,2)
+        overlay = process_frame_pair(col_frame, ir_frame, matrix, tracker, detector, detect_keypoints, frame_num)
 
-        # for i in keypoints:
-        #     cv2.circle(ir_frame, (int(i.pt[0]), int(i.pt[1])), 2, (0, 255, 0), -1)
-
-        # ir_frame= cv2.drawKeypoints(ir_frame, keypoints, np.array([]), (0, 0, 255), 
-        #                                 cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-        
-        # Warp image2 to align with image1
-        aligned_img = cv2.warpPerspective(ir_frame, matrix, (col_frame.shape[1], col_frame.shape[0]))
-
-        if detect_keypoints:
-            mapped_keypoints = np.array(cv2.perspectiveTransform(trans_keypoints, matrix).reshape(-1,2))
-            valid_keypoints = 0
-            for id in range(len(keypoint_ids)):
-                x, y = (int(mapped_keypoints[id,0]), int(mapped_keypoints[id,1]))
-                cv2.circle(col_frame, (x, y), 5, (0, 255, 255), -1)
-                # cv2.circle(col_frame, (int(mapped_keypoints[i,0]), int(mapped_keypoints[i,1])), 5, (0, 255, 255), -1)
-                cv2.putText(col_frame, str(keypoint_ids[id]), (x + 10, y - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                valid_keypoints += 1
-
-            # if valid_keypoints < TOTAL_KEYPOINTS - EXCLUDE_TOPMOST:
-            #     print(frame_num, "Valid keypoints:", valid_keypoints)
-        # Overlay images
-        overlay = cv2.addWeighted(col_frame, 1, aligned_img, 0, 0)
-
-        if output_path!=None:
+        if out:
             out.write(overlay)
 
         cv2.imshow('Live Feed', overlay)
@@ -346,8 +339,12 @@ def video_overlay_2(col_video,ir_video,matrix,detect_keypoints=False,output_path
             break
 
         frame_num += 1
+
     col.release()
     ir.release()
+    if out:
+        out.release()
+    cv2.destroyAllWindows()
 
 ################################################################################
 
@@ -420,7 +417,7 @@ ir_image = cv2.cvtColor(ir_image, cv2.COLOR_GRAY2BGR)
 #     cv2.drawMarker(ir_image, (i[0], i[1]), (0, 0, 255), markerType=cv2.MARKER_STAR, thickness=1,markerSize=10)
 #     print(i)
 
-# im_with_keypoints = draw_blob(ir_image, keypoints)
+im_with_keypoints = draw_blob(ir_image, keypoints, ir_ref_pts)
 # cv2.imshow("Keypoints", im_with_keypoints)
 
 

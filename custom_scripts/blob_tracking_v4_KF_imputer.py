@@ -242,7 +242,7 @@ def preprocess_and_detect(col_video, ir_video, detector, camera_matrix, dist_coe
 
         ir_frame = undistort_image(ir_frame, camera_matrix, dist_coeffs)
         gray = cv2.cvtColor(ir_frame, cv2.COLOR_BGR2GRAY)
-        gray = temp_func(gray)
+        # gray = temp_func(gray)
 
         keypoints = detector.detect(gray)
         det_pts = [(kp.pt[0], kp.pt[1]) for kp in keypoints]
@@ -330,7 +330,7 @@ def display_video_with_overlay(color_frames, ir_frames, imputed_array, imputed_f
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
         cv2.imshow("Live Feed", overlay)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        if cv2.waitKey(10) & 0xFF == ord('q'):
             break
 
     cv2.destroyAllWindows()

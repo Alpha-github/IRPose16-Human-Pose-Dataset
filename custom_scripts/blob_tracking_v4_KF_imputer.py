@@ -2,6 +2,7 @@ import numpy as np
 from pykalman import KalmanFilter
 from tqdm import tqdm
 import time
+import pandas as pd
 
 import numpy as np
 
@@ -91,10 +92,7 @@ class SimpleKalmanImputer:
                     imputed_array[t, kp_idx] = [x_series[t], y_series[t]]
 
         return imputed_array, imputed_flags
-
-
-
-
+    
 import cv2
 import numpy as np
 import os
@@ -297,41 +295,68 @@ def perform_kalman_imputation(framewise_keypoints):
     print("Imputation shape:", imputed_array.shape)
     return imputed_array, imputed_flags
 
+def draw_keypoints(frame, points, flags, matrix):
+    imputed_this_frame = [j for j, flag in enumerate(flags) if flag]
+
+    for j, pt in enumerate(points):
+        if not np.isnan(pt[0]):
+            mapped = cv2.perspectiveTransform(np.array([[pt]], dtype=np.float32), matrix)[0][0]
+            color = (0, 255, 0) if j in imputed_this_frame else (0, 255, 255) if not flags[j] else (255, 0, 0)
+            cv2.circle(frame, tuple(int(x) for x in mapped), 5, color, -1)
+            cv2.putText(frame, str(j), (int(mapped[0]) + 5, int(mapped[1]) - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
+def warp_and_overlay(ir_frame, color_frame, matrix):
+    ir_warp = cv2.warpPerspective(ir_frame, matrix, (color_frame.shape[1], color_frame.shape[0]))
+    return cv2.addWeighted(color_frame, 1, cv2.cvtColor(ir_warp, cv2.COLOR_GRAY2BGR), 0, 0)
+
+def display_frame(index, color_frames, ir_frames, imputed_array, imputed_flags, matrix):
+    col_frame = color_frames[index].copy()
+    ir_gray = ir_frames[index]
+    all_points = imputed_array[index]
+    flags = imputed_flags[index]
+
+    # Print imputed keypoints for this frame
+    for j, flag in enumerate(flags):
+        if flag:
+            x, y = all_points[j]
+            print(f"[Frame {index+1}] Imputed Keypoint {j}: x = {x:.2f}, y = {y:.2f}")
+
+    draw_keypoints(col_frame, all_points, flags, matrix)
+    overlay = warp_and_overlay(ir_gray, col_frame, matrix)
+
+    cv2.putText(overlay, f"Frame: {index+1}/{len(color_frames)}", (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+    cv2.imshow("Live Feed", overlay)
+
 def display_video_with_overlay(color_frames, ir_frames, imputed_array, imputed_flags, matrix):
-    for i in range(len(color_frames)):
-        col_frame = color_frames[i]
-        ir_gray = ir_frames[i]
-        all_points = imputed_array[i]
-        flags = imputed_flags[i]
+    index = 0
+    playing = True
+    total_frames = len(color_frames)
 
-        imputed_this_frame = [str(j) for j, flag in enumerate(flags) if flag]
+    while True:
+        if playing or cv2.getWindowProperty("Live Feed", 0) < 0:
+            display_frame(index, color_frames, ir_frames, imputed_array, imputed_flags, matrix)
 
-        for j, flag in enumerate(flags):
-            if flag:
-                x, y = all_points[j]
-                print(f"[Frame {i+1}] Imputed Keypoint {j}: x = {x:.2f}, y = {y:.2f}")
+        key = cv2.waitKey(50 if playing else 0) & 0xFF
 
-        for j, pt in enumerate(all_points):
-            if not np.isnan(pt[0]):
-                mapped = cv2.perspectiveTransform(np.array([[pt]], dtype=np.float32), matrix)[0][0]
-                color = (255, 0, 0) if flags[j] else (0, 255, 255)
-                if imputed_this_frame:
-                    color = (0, 255, 0)
-                cv2.circle(col_frame, tuple(int(x) for x in mapped), 5, color, -1)
-                cv2.putText(col_frame, str(j), (int(mapped[0]) + 5, int(mapped[1]) - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-            else:
-                continue
-
-        ir_warp = cv2.warpPerspective(ir_gray, matrix, (col_frame.shape[1], col_frame.shape[0]))
-        overlay = cv2.addWeighted(col_frame, 1, cv2.cvtColor(ir_warp, cv2.COLOR_GRAY2BGR), 0, 0)
-
-        cv2.putText(overlay, f"Frame: {i+1}/{len(color_frames)}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-
-        cv2.imshow("Live Feed", overlay)
-        if cv2.waitKey(10) & 0xFF == ord('q'):
+        if key == ord('q'):
             break
+        elif key == 32:  # Space bar
+            playing = not playing
+        elif key == 65 or key==97:  # Left arrow ← (ASCII for left arrow)
+            if not playing and index > 0:
+                index -= 1
+                display_frame(index, color_frames, ir_frames, imputed_array, imputed_flags, matrix)
+        elif key == 68 or key==100:  # Right arrow → (ASCII for right arrow)
+            if not playing and index < total_frames - 1:
+                index += 1
+                display_frame(index, color_frames, ir_frames, imputed_array, imputed_flags, matrix)
+        elif playing:
+            index += 1
+            if index >= total_frames:
+                break
 
     cv2.destroyAllWindows()
 

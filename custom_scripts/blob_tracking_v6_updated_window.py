@@ -217,7 +217,7 @@ def preprocess_and_detect(col_video, ir_video, detector, camera_matrix, dist_coe
         keypoints = detector.detect(gray)
         det_pts = [(kp.pt[0], kp.pt[1]) for kp in keypoints]
         det_pts.sort(key=lambda x: x[1])  # Sort by y to stabilize
-        det_pts = det_pts[2:]  # Limit to NUM_KEYPOINTS
+        det_pts = det_pts[exclude_top:]  # Limit to NUM_KEYPOINTS
 
         frame_keypoints = [[None, None] for _ in range(NUM_KEYPOINTS)]
 
@@ -417,22 +417,22 @@ dist_coeffs = np.array([[-3.49027957e+00,3.13640856e+01,8.12342618e-02,3.0652753
 subject = input("Enter Subject/Person Name: ")
 folder_path = os.path.join("Recordings", subject)
 
-if subject in os.listdir("Recordings"):
-    recs = os.listdir(folder_path)
-    recs.sort()
-    color_videos = [f for f in recs if f.startswith("color_video")]
-    ir_videos = [f for f in recs if f.startswith("ir_video")]
+# if subject in os.listdir("Recordings"):
+#     recs = os.listdir(folder_path)
+#     recs.sort()
+#     color_videos = [f for f in recs if f.startswith("color_video")]
+#     ir_videos = [f for f in recs if f.startswith("ir_video")]
 
-    def extract_dt(filename):
-        dt_str = filename.split("_video_")[1].replace(".avi", "")
-        return datetime.strptime(dt_str, "%m-%d-%y_%H-%M-%S")
+#     def extract_dt(filename):
+#         dt_str = filename.split("_video_")[1].replace(".avi", "")
+#         return datetime.strptime(dt_str, "%m-%d-%y_%H-%M-%S")
 
-    latest_color = max(color_videos, key=extract_dt)
-    latest_ir = max(ir_videos, key=extract_dt)
-    color_video_path = os.path.join(folder_path, latest_color)
-    ir_video_path = os.path.join(folder_path, latest_ir)
-else:
-    raise Exception("Subject not found in Recordings")
+#     latest_color = max(color_videos, key=extract_dt)
+#     latest_ir = max(ir_videos, key=extract_dt)
+#     color_video_path = os.path.join(folder_path, latest_color)
+#     ir_video_path = os.path.join(folder_path, latest_ir)
+# else:
+#     raise Exception("Subject not found in Recordings")
 
 col_image = cv2.imread(r"Custom_Results/sample_test_Color.png")
 ir_image = cv2.imread(r"Custom_Results/sample_test_IR.png", cv2.IMREAD_GRAYSCALE)
@@ -448,7 +448,22 @@ ir_image = preprocess_ir_data(ir_image, 255)
 ir_image = cv2.cvtColor(ir_image, cv2.COLOR_GRAY2BGR)
 im_with_keypoints = draw_blob(ir_image, keypoints, ir_ref_pts)
 irtorgb_aligned_img, irtorgb_overlay, M = homography_transform(ir_image, col_image, ir_ref_pts, aruco_ref_pts)
+# video_overlay_2(color_video_path, ir_video_path, M)
+# cv2.waitKey(0)
+# cv2.destroyAllWindows()
 
-video_overlay_2(color_video_path, ir_video_path, M)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+if subject in os.listdir("Recordings"):
+    recs = os.listdir(folder_path)
+    recs.sort()
+    color_videos = [f for f in recs if f.startswith("color_video")]
+    ir_videos = [f for f in recs if f.startswith("ir_video")]
+
+    for col,ir in zip(color_videos[:], ir_videos[:]):
+        color_video_path = os.path.join(folder_path, col)
+        ir_video_path = os.path.join(folder_path, ir)
+        print(f"Processing: {col} and {ir}")
+        video_overlay_2(color_video_path, ir_video_path, M)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+else:
+    raise Exception("Subject not found in Recordings")

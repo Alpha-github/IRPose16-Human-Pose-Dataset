@@ -90,7 +90,7 @@ if subject in list(map(str.lower,os.listdir(pose_json_root))):
             print(f"Processing {i+1}/{len(files)}: {json_file}")
 
     file_no = int(input("Enter file number to display (0 for all): ").strip())
-    json_files = files[i-1]
+    json_file = files[file_no-1]
     json_path = os.path.join(subject_dir, json_file)
     try:
         display_annotated_video(json_path)

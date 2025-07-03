@@ -22,7 +22,7 @@ def draw_keypoints(frame, keypoints, radius=4):
         if coord is not None:
             x, y = int(coord[0]), int(coord[1])
             cv2.circle(frame, (x, y), radius, (0, 255, 0), -1)
-            cv2.putText(frame, str(label), (x+6, y-6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
+            cv2.putText(frame, str(label), (x+6, y-6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
 
 def display_annotated_video(json_path):
     annotations = load_annotations(json_path)
@@ -83,8 +83,10 @@ def rename_keypoints_in_json(json_path, mapping):
         for kpt_num, coords in keypoints.items():
             new_label = mapping.get(int(kpt_num), str(kpt_num))  # fallback to number if not mapped
             new_data[frame][new_label] = coords
-
-    new_json_path = json_path.replace(".json", "_renamed.json")
+    
+    renamed_dir = os.path.join(os.path.dirname(json_path),"named_keypoints")
+    os.makedirs(renamed_dir, exist_ok=True)
+    new_json_path = os.path.join(renamed_dir,os.path.basename(json_path))
     with open(new_json_path, "w") as f:
         json.dump(new_data, f, indent=4)
     
@@ -118,10 +120,26 @@ if subject in list(map(str.lower, os.listdir(pose_json_root))):
             sample_frame = next(iter(sample_data.values()))
             keypoint_nums = sorted(map(int, sample_frame.keys()))
         print(f"Detected keypoints: {keypoint_nums}")
+
         mapping = {}
-        for num in keypoint_nums:
-            label = input(f"Label for keypoint {num}: ").strip()
-            mapping[num] = label
+        keypoint_names = [
+            "head", "neck", "chest", "left_shoulder", "right_shoulder",
+            "left_elbow", "right_elbow", "pelvis", "left_hip", "right_hip",
+            "left_wrist", "right_wrist", "left_knee", "right_knee",
+            "left_ankle", "right_ankle"
+        ]
+        inp_pts = eval(input("Enter keypoint numbers (comma-separated): "))
+        print(f"Selected keypoints: {inp_pts}")
+        if len(inp_pts) != len(keypoint_names):
+            print("❌ Number of keypoints does not match the number of labels.")
+            exit(1)
+        else:
+            for label,num in zip(keypoint_names,inp_pts):
+                mapping[num] = label
+                
+        # for label in keypoint_names:
+        #     num = int(input(f"Number for keypoint {label}: ").strip())
+        #     mapping[num] = label
 
         # Step: Create renamed JSON file
         new_json_path = rename_keypoints_in_json(json_path, mapping)

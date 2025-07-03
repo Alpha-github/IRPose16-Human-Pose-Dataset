@@ -6,13 +6,16 @@ import numpy as np
 def load_annotations(json_path):
     with open(json_path, "r") as f:
         data = json.load(f)
-    return {int(frame): {int(k): v for k, v in pts.items()} for frame, pts in data.items()}
+    return {int(frame): {k: v for k, v in pts.items()} for frame, pts in data.items()}
 
 def get_video_path(json_path):
     # Extract subject name and timestamp from JSON filename
     json_filename = os.path.basename(json_path)
     subject = json_filename.split("_")[0]
     video_path = "\\".join(json_path.split("\\")[:-1])+"\\"+json_filename.replace(".json", ".avi").replace(f"{subject}", "color_video")
+
+    if "named_keypoints\\" in video_path:
+        video_path = video_path.replace("named_keypoints\\", "")
     print(f"Video path: {video_path}")
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video not found: {video_path}")
@@ -78,7 +81,11 @@ def display_annotated_video(json_path):
 pose_json_root = "pose_json"
 subject = input("Enter subject name: ").strip().lower()
 if subject in list(map(str.lower,os.listdir(pose_json_root))):
-    subject_dir = os.path.join(pose_json_root, subject)
+    raw_or_named = input("Do you want to view raw or named keypoints (default - raw): ").strip().lower()
+    if raw_or_named == "named":
+        subject_dir = os.path.join(pose_json_root, subject, "named_keypoints")
+    else:
+        subject_dir = os.path.join(pose_json_root, subject)
 
     def extract_json(filename):
         return filename.endswith(".json")

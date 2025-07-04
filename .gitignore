@@ -3,11 +3,15 @@ calibration_ir_images_with_detected_chessboard/
 OLD_calibration_images/
 calibration_ir_images-unique/
 Log/
+pose_json/
+models/
+keypoint_validator_models/
 
 __pycache__/
 .vscode/
 .gitkeep
 
 *.avi
+*.pkl
 
 Dataset Collection Protocol FINAL.txt

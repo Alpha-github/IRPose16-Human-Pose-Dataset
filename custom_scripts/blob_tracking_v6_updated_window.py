@@ -221,12 +221,26 @@ def preprocess_and_detect(col_video, ir_video, detector, camera_matrix, dist_coe
 
         frame_keypoints = [[None, None] for _ in range(NUM_KEYPOINTS)]
 
-        if prev_frame_labeled is None:
-            # First frame: direct assign
-            for i, pt in enumerate(det_pts):
-                frame_keypoints[i] = pt
-            last_valid_frame = frame_keypoints.copy()
+        # if prev_frame_labeled is None:
+        #     # First frame: direct assign
+        #     for i, pt in enumerate(det_pts):
+        #         frame_keypoints[i] = pt
+        #     last_valid_frame = frame_keypoints.copy()
 
+        if prev_frame_labeled is None:
+            if len(det_pts) >= NUM_KEYPOINTS:
+                for i in range(NUM_KEYPOINTS):
+                    frame_keypoints[i] = det_pts[i]
+                prev_frame_labeled = frame_keypoints.copy()
+                last_valid_frame = frame_keypoints.copy()
+            else:
+                print(f"[Frame {frame_count}] Skipped initialization: only {len(det_pts)} points detected.")
+                framewise_keypoints.append(frame_keypoints)
+                color_frames.append(col_frame.copy())
+                ir_frames.append(gray.copy())
+                frame_count += 1
+                pbar.update(1)
+                continue
         else:
             # Check if prev_frame_labeled has all valid keypoints
             valid_prev = all(pt[0] is not None and pt[1] is not None for pt in prev_frame_labeled)
@@ -256,6 +270,56 @@ def preprocess_and_detect(col_video, ir_video, detector, camera_matrix, dist_coe
     col.release()
     ir.release()
     return framewise_keypoints, color_frames, ir_frames
+
+from copy import deepcopy
+
+def backward_impute_skipped_frames(framewise_keypoints):
+    """
+    Goes backward through framewise_keypoints to impute missing labels
+    in early frames by using the first fully-labeled frame as reference.
+    """
+    print("🔁 Performing backward label correction...")
+    first_valid_idx = None
+    for idx, frame in enumerate(framewise_keypoints):
+        if all(pt[0] is not None and pt[1] is not None for pt in frame):
+            first_valid_idx = idx
+            break
+
+    if first_valid_idx is None or first_valid_idx == 0:
+        print("⚠️ No backward imputation needed or possible.")
+        return framewise_keypoints  # Nothing to impute
+
+    print(f"🧠 First valid frame found at index {first_valid_idx}. Starting backward correction...")
+
+    # Start from first_valid_idx, go backward
+    reference_frame = deepcopy(framewise_keypoints[first_valid_idx])
+
+    for t in range(first_valid_idx - 1, -1, -1):
+        curr_frame = framewise_keypoints[t]
+        new_frame = [[None, None] for _ in range(NUM_KEYPOINTS)]
+
+        detected_pts = [pt for pt in curr_frame if pt[0] is not None and pt[1] is not None]
+        if len(detected_pts) == 0:
+            framewise_keypoints[t] = deepcopy(reference_frame)
+            continue
+
+        match = match_keypoints(reference_frame, detected_pts)
+
+        reverse_detected_map = {v: k for k, v in match.items()}
+        for idx, pt in enumerate(detected_pts):
+            if idx in reverse_detected_map:
+                label = reverse_detected_map[idx]
+                new_frame[label] = pt
+
+        # Fill remaining missing points from reference
+        for i in range(NUM_KEYPOINTS):
+            if new_frame[i][0] is None or new_frame[i][1] is None:
+                new_frame[i] = reference_frame[i]
+
+        framewise_keypoints[t] = deepcopy(new_frame)
+
+    print("✅ Backward imputation completed.")
+    return framewise_keypoints
 
 def perform_kalman_imputation(framewise_keypoints):
     imputer = WindowedKalmanImputer(window_size=15)
@@ -380,6 +444,8 @@ def video_overlay_2(col_video, ir_video, matrix):
     detector = initialize_blob_detector()
     framewise_keypoints, color_frames, ir_frames = preprocess_and_detect(
         col_video, ir_video, detector, camera_matrix, dist_coeffs)
+    # 🔁 Correct skipped initial frames
+    framewise_keypoints = backward_impute_skipped_frames(framewise_keypoints)
     imputed_array, imputed_flags = perform_kalman_imputation(framewise_keypoints)
 
     nan_count = np.isnan(imputed_array).sum()
@@ -448,6 +514,7 @@ ir_image = preprocess_ir_data(ir_image, 255)
 ir_image = cv2.cvtColor(ir_image, cv2.COLOR_GRAY2BGR)
 im_with_keypoints = draw_blob(ir_image, keypoints, ir_ref_pts)
 irtorgb_aligned_img, irtorgb_overlay, M = homography_transform(ir_image, col_image, ir_ref_pts, aruco_ref_pts)
+# video_overlay_2("Recordings\Pranav2\color_video_05-06-25_14-10-39.avi", "Recordings\Pranav2\ir_video_05-06-25_14-10-39.avi", M)
 # video_overlay_2(color_video_path, ir_video_path, M)
 # cv2.waitKey(0)
 # cv2.destroyAllWindows()

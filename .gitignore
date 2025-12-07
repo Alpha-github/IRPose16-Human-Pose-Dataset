@@ -6,6 +6,9 @@ Log/
 pose_json/
 models/
 keypoint_validator_models/
+Final Rec/
+coco_dataset/
+evaluation/
 
 __pycache__/
 .vscode/
@@ -13,5 +16,6 @@ __pycache__/
 
 *.avi
 *.pkl
+*.docx
 
 Dataset Collection Protocol FINAL.txt
